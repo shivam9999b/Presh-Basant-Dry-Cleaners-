@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Delivery - Basanta</title>
+<style>
+body{font-family:system-ui;padding:15px;background:#f5f5f5;margin:0}
+.card{background:#fff;padding:15px;margin-bottom:12px;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.08)}
+.btn{padding:10px 15px;border:0;border-radius:8px;font-weight:bold;margin-right:6px;margin-top:8px;cursor:pointer}
+.picked{background:#ffbe0b}.delivered{background:#06d6a0;color:#fff}.call{background:#118ab2;color:#fff}
+.save{background:#000;color:#fff}
+a.map{color:#118ab2;text-decoration:none;font-weight:bold;display:inline-block;margin:8px 0}
+.tab{padding:8px 14px;border-radius:20px;border:1px solid #ddd;background:#fff;margin-right:5px}
+.tab.active{background:#000;color:#fff}
+.topbox{background:#000;color:#fff;padding:14px;border-radius:10px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center}
+input,select{padding:10px;border-radius:8px;border:1px solid #ccc;margin-top:8px}
+</style>
+</head>
+<body>
+<h2>Basanta - Delivery Boy</h2>
+
+<div id="login">
+<input id="pin" type="password" placeholder="PIN 1234" style="padding:12px;width:60%;border-radius:8px;border:1px solid #ccc">
+<button onclick="checkPin()" class="btn delivered">Login</button>
+</div>
+
+<div id="main" style="display:none">
+<div class="topbox"><div>Aaj ka Collection</div><div id="totalBox" style="font-size:20px;font-weight:bold">Rs 0</div></div>
+<div style="margin-bottom:15px">
+<button class="tab active" id="tab-received" onclick="setFilter('received')">New Order</button>
+<button class="tab" id="tab-picked" onclick="setFilter('picked')">Picked</button>
+<button class="tab" id="tab-delivered" onclick="setFilter('delivered')">Delivered</button>
+</div>
+<div id="orders">Loading...</div>
+</div>
+
+<script type="module">
+import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
+const SUPABASE_URL = "https://ubsyhqkefhtskxjpjzbf.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_hCW9e5LLUWNnQaKDxCP5eg_1tUpo5Tr";
+const supabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+let currentFilter='received';
+
+window.checkPin=function(){
+ if(document.getElementById('pin').value==="1234"){
+   document.getElementById('login').style.display='none';
+   document.getElementById('main').style.display='block';
+   loadOrders(); loadTotal();
+   startRealtime();
+ } else alert("Galat PIN");
+}
+
+window.setFilter=function(f){
+ currentFilter=f;
+ document.querySelectorAll('.tab').forEach(b=>b.classList.remove('active'));
+ document.getElementById('tab-'+f).classList.add('active');
+ loadOrders();
+}
+
+async function loadTotal(){
+ let res=await supabaseClient.from("orders").select("collected_amount,delivered_at").eq("status","delivered").eq("payment_status","paid").order("delivered_at",{ascending:false}).limit(200);
+ let sum=0;
+ let todayStr=new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Kolkata'});
+ if(res.data){
+  for(let o of res.data){
+    if(!o.delivered_at) continue;
+    let dStr=new Date(o.delivered_at).toLocaleDateString('en-CA',{timeZone:'Asia/Kolkata'});
+    if(dStr===todayStr) sum+=parseInt(o.collected_amount||0);
+  }
+ }
+ document.getElementById("totalBox").innerText="Rs "+sum;
+}
+
+async function loadOrders(){
+ const div=document.getElementById("orders");
+ div.innerHTML="Loading...";
+ let res=await supabaseClient.from("orders").select("*").order("created_at",{ascending:false}).limit(100);
+ if(res.error){div.innerHTML=res.error.message;return;}
+ let data=res.data||[];
+ let filtered=[];
+ if(currentFilter==='received'){
+   filtered=data.filter(o=>!['picked','delivered'].includes(o.status));
+ } else {
+   filtered=data.filter(o=>o.status===currentFilter);
+ }
+ showOrders(filtered);
+}
+
+function showOrders(list){
+ const div=document.getElementById("orders");
+ if(!list.length){div.innerHTML="Koi order nahi hai";return;}
+ div.innerHTML="";
+ list.forEach(o=>{
+  let time=new Date(o.created_at).toLocaleString('en-IN',{timeZone:'Asia/Kolkata'});
+  let mapLink="https://www.google.com/maps/search/?api=1&query="+encodeURIComponent(o.address||"");
+  let html='<div class="card"><b>'+(o.customer_name||'Customer')+'</b> - '+o.phone+'<br><small>'+time+' | '+ (o.status||'NEW') +'</small><br><br>'+(o.address||'')+' '+(o.area||'')+'<br><b>Bill: Rs '+(o.total_amount||0)+'</b><br><a class="map" target="_blank" href="'+mapLink+'">📍 Map Dekho</a><br><a href="tel:'+o.phone+'"><button class="btn call">Call</button></a> ';
+  if(currentFilter==='received'){
+    html+='<button class="btn picked" onclick="setPicked(\''+o.id+'\')">Picked Karo</button></div>';
+  } else if(currentFilter==='picked'){
+    html+='<div style="margin-top:10px;border-top:1px solid #eee;padding-top:10px"><b>Paisa Liya?</b><br><input id="amt-'+o.id+'" type="number" value="'+(o.total_amount||220)+'" style="width:100px"> <select id="mode-'+o.id+'"><option value="CASH">CASH</option><option value="ONLINE">ONLINE</option><option value="PENDING">PENDING</option></select><br><button class="btn delivered" onclick="deliverWithPayment(\''+o.id+'\')">✅ Deliver + Payment Add</button></div></div>';
+  } else {
+    if(o.payment_status==='paid') html+='<div style="background:#d4edda;color:#155724;padding:10px;border-radius:8px;margin-top:10px;font-weight:bold">✅ RECEIVED: Rs '+(o.collected_amount||0)+' ('+(o.payment_mode||'')+')</div>';
+    else html+='<div style="background:#f8d7da;padding:10px;border-radius:8px;margin-top:10px;font-weight:bold">❌ PENDING Rs '+(o.total_amount||0)+'</div>';
+    html+='<div style="margin-top:8px"><input id="amt-'+o.id+'" type="number" value="'+(o.collected_amount||0)+'" style="width:80px"> <select id="mode-'+o.id+'"><option value="CASH" '+(o.payment_mode==='CASH'?'selected':'')+'>CASH</option><option value="ONLINE" '+(o.payment_mode==='ONLINE'?'selected':'')+'>ONLINE</option><option value="PENDING" '+(o.payment_mode==='PENDING'?'selected':'')+'>PENDING</option></select> <button class="btn save" onclick="updatePaymentOnly(\''+o.id+'\')">Update</button></div></div>';
+  }
+  div.innerHTML+=html;
+ });
+}
+
+window.setPicked=async function(id){
+ let r=await supabaseClient.from("orders").update({status:'picked'}).eq("id",id);
+ if(r.error) alert(r.error.message); else loadOrders();
+}
+window.deliverWithPayment=async function(id){
+ let amt=document.getElementById('amt-'+id).value;
+ let mode=document.getElementById('mode-'+id).value;
+ if(!amt){alert("Amount likho");return;}
+ let r=await supabaseClient.from("orders").update({status:'delivered',delivered_at:new Date().toISOString(),payment_status:mode==='PENDING'?'pending':'paid',payment_mode:mode,collected_amount:parseInt(amt)}).eq("id",id);
+ if(r.error) alert(r.error.message); else {alert("✅ Rs "+amt+" add ho gaya"); loadOrders(); loadTotal();}
+}
+window.updatePaymentOnly=async function(id){
+ let amt=document.getElementById('amt-'+id).value;
+ let mode=document.getElementById('mode-'+id).value;
+ let r=await supabaseClient.from("orders").update({payment_status:mode==='PENDING'?'pending':'paid',payment_mode:mode,collected_amount:parseInt(amt)}).eq("id",id);
+ if(r.error) alert(r.error.message); else {alert("Update Rs "+amt); loadOrders(); loadTotal();}
+}
+function startRealtime(){
+ supabaseClient.channel('orders-live').on('postgres_changes',{event:'*',schema:'public',table:'orders'},()=>{loadOrders(); loadTotal();}).subscribe();
+}
+</script>
+</body>
+</html>
